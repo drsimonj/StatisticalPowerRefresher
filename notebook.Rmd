@@ -1,0 +1,536 @@
+---
+title: "Understanding power and the t-test"
+output: html_document
+---
+
+```{r knit_setup}
+knitr::opts_chunk$set(
+  comment = "#>",
+  fig.path = "temp/"
+)
+```
+```{r setup_packages}
+library(tidyverse)
+library(glue)
+library(ggforce)
+```
+```{r setup_plots}
+# Set default ggplot2 theme
+theme_set(theme_minimal() +
+          theme(panel.grid = element_blank(),
+                axis.text.y = element_blank(),
+                axis.title = element_blank(),
+                axis.line.x = element_line(color = "grey", size = 1.5)))
+```
+```{r setup_colours}
+# Lightest to darkest
+
+# Blues from https://colorhunt.co/palette/159617
+blues <- c("#ecfcff", "#b2fcff", "#5edfff", "#3e64ff")
+```
+
+```{r}
+# Set a seed to make the analysis reproducible
+set.seed(20200525)
+```
+
+# The t distribution
+
+```{r}
+# Simulate some data
+n <- 10
+x <- sample(seq(-2, 2), n, replace = TRUE, prob = c(1, 2, 3, 3, 1))
+mu <- 0
+```
+```{r}
+t_val <- t_val <- (mean(x) - mu) / (sd(x) / sqrt(n))
+df    <- n - 1
+```
+```{r}
+tDistShading <- function(x, df, min_t = -Inf, max_t = Inf) {
+    y <- dt(x, df)
+    y[x < min_t | x > max_t] <- NA
+    return(y)
+}
+```
+```{r t_distribution_basic}
+ggplot(tibble(x = seq(-4, 4, by = .1)), aes(x = x)) +
+  # Prob area
+  stat_function(fun=tDistShading, args = list(df = df, min_t = t_val),
+                geom="area", fill = blues[3]) +
+  # t distribution
+  stat_function(fun = dt,
+                args = list(df = df),
+                size = 2) +
+  # t statistic
+  geom_segment(aes(x = t_val, xend = t_val,
+                     y = 0, yend = dt(t_val, df = df)),
+                 color = blues[4], linetype = 3) +
+  geom_point(aes(x = t_val, y = dt(t_val, df)),
+             size = 4, color = blues[4]) +
+  
+  # Annotations
+  geom_mark_circle(aes(x = t_val + .2, y = dt(t_val + .2, df)/1.4,
+                       label = "One-sided p-value"),
+                    description = glue("Here, {scales::percent(pt(t_val, df, lower.tail = FALSE))} of the curve meaning p = {round(pt(t_val, df, lower.tail = FALSE), 2)}"),
+                    con.cap = 0, expand = 0,
+                    color = blues[3], con.colour = blues[3],
+                    label.colour = blues[3]) +
+  geom_mark_circle(aes(x = -1.5, y = dt(-1.5, df),
+                       label = "t distribution"),
+                    description = "Shape defined by degrees of freedom\n(n-1)",
+                    con.cap = 0, expand = 0) +
+  geom_mark_circle(aes(x = t_val, y = dt(t_val, df),
+                       label = "t statistic"),
+                   description = "mean(x) /\n(sd(x) / sqrt(n))",
+                   con.cap = 0, color = blues[4],
+                   con.colour = blues[4],
+                   label.colour = blues[4]) +
+  # Axes
+  scale_y_continuous(expand = c(0.01, 0)) +
+  scale_x_continuous(breaks = c(0, t_val),
+                     labels = c("0", round(t_val, 2)))
+```
+
+# Know how to work back from p
+
+```{r}
+n
+```
+
+```{r}
+sd(x)
+```
+
+```{r critical_ts}
+critical_ts <- tibble(
+  lower = qt(0.025, df),
+  upper = qt(0.025, df, lower.tail = FALSE)
+)
+
+ggplot(tibble(x = seq(-4, 4, by = .1)), aes(x = x)) +
+  # Prob area
+  stat_function(
+    fun = tDistShading,
+    args = list(df = df, max_t = critical_ts$lower),
+    geom = "area",
+    fill = blues[4]
+  ) +
+  stat_function(
+    fun = tDistShading,
+    args = list(df = df, min_t = critical_ts$upper),
+    geom = "area",
+    fill = blues[4]
+  ) +
+  # t distribution
+  stat_function(fun = dt,
+                args = list(df = df),
+                size = 2) +
+  
+  # Annotations
+  geom_mark_rect(
+    data = tibble(
+      x = c(-4, critical_ts$lower),
+      y = c(0, dt(critical_ts$lower, df))
+    ),
+    aes(x, y, label = "0.025%"),
+    description = glue("Percentage below\nt = {round(critical_ts$lower, 2)}"),
+    con.cap = 0,color = blues[4],
+                   con.colour = blues[4],
+                   label.colour = blues[4]
+  ) +
+  geom_mark_rect(
+    data = tibble(
+      x = c(critical_ts$upper, 4),
+      y = c(0, dt(critical_ts$upper, df))
+    ),
+    aes(x, y, label = "0.025%"),
+    description = glue("Percentage above\nt = {round(critical_ts$upper, 2)}"),
+    con.cap = 0,color = blues[4],
+                   con.colour = blues[4],
+                   label.colour = blues[4]
+  ) +
+  geom_mark_circle(aes(x = -1.2, y = dt(-1.2, df),
+                       label = "t distribution"),
+                    description = glue("df = {df}"),
+                    con.cap = 0, expand = 0) +
+  # Axes
+  scale_y_continuous(expand = c(0.01, 0)) +
+  scale_x_continuous(
+    breaks = c(critical_ts$lower, 0, critical_ts$upper),
+    labels = c(round(critical_ts$lower, 2), "0", round(critical_ts$upper, 2))
+  )
+```
+
+```{r}
+critical_ts$upper * (sd(x) / sqrt(n))
+```
+
+# Don't forget to deal with uncertainty twice
+
+```{r t_dist_around_critical_t}
+shifted_dt <- function(x, shift_mean, df) {
+  shifted_x <- x - shift_mean
+  dt(x = shifted_x, df)
+}
+
+shifted_tDistShading <- function(x, shift_mean, df, min_t = -Inf, max_t = Inf) {
+    y <- shifted_dt(x, shift_mean, df)
+    y[x < min_t | x > max_t] <- NA
+    return(y)
+}
+
+ggplot(tibble(x = seq(-7, 7, by = .1)), aes(x = x)) +
+  # Prob area
+  stat_function(
+    fun = shifted_tDistShading,
+    args = list(df = df,
+                shift_mean = critical_ts$upper,
+                min_t = critical_ts$upper),
+    geom = "area",
+    fill = blues[2]
+  ) +
+  stat_function(
+    fun = tDistShading,
+    args = list(df = df,
+                min_t = critical_ts$upper),
+    geom = "area",
+    fill = "white"
+  ) +
+  
+  # critical t values
+  geom_segment(
+    aes(
+      x = critical_ts$upper,
+      xend = critical_ts$upper,
+      y = 0,
+      yend = dt(0, df = df)
+    ),
+    linetype = 2,
+    color = "grey"
+  ) +
+  geom_segment(aes(
+    x = critical_ts$upper,
+    xend = critical_ts$upper,
+    y = 0,
+    yend = dt(critical_ts$upper, df = df)
+  )) +
+  
+  # t distributions
+  stat_function(
+    fun = shifted_dt,
+    args = list(df = df,
+                shift_mean = critical_ts$upper),
+    size = 2,
+    color = blues[4]
+  ) +
+  stat_function(
+    fun = dt,
+    args = list(df = df),
+    size = 2,
+    color = "grey"
+  ) +
+  # Annotations
+  geom_mark_circle(
+    aes(x = -1.2,
+        y = dt(-1.2, df)),
+    description = "t distribution of the null hypothesis",
+    con.cap = 0,
+    con.colour = "grey",
+    expand = 0
+  ) +
+  geom_mark_circle(
+    aes(
+      x = 3.5,
+      y = shifted_dt(3.5, df, shift_mean = critical_ts$upper)
+    ),
+    description = "t distribution of the population mean",
+    con.cap = 0,
+    expand = 0,
+    color = blues[4],
+    con.colour = blues[4],
+    label.colour = blues[4]
+  ) +
+  # Axes
+  scale_y_continuous(expand = c(0.01, 0)) +
+  scale_x_continuous(
+    breaks = c(0, critical_ts$upper),
+    labels = c("0", round(critical_ts$upper, 2))
+  )
+```
+
+```{r}
+target_t <- critical_ts$upper + 1.5
+target_t
+```
+```{r}
+# Corresponding mean
+target_t * (sd(x) / sqrt(n))
+```
+
+```{r}
+target_power <- pt(target_t - critical_ts$upper, df = df)
+target_power
+```
+
+```{r power_of_a_random_mean}
+# Determine the power of a result
+ggplot(tibble(x = seq(-8, 8, by = .1)), aes(x = x)) +
+  # Prob area
+  stat_function(
+    fun = shifted_tDistShading,
+    args = list(df = df,
+                shift_mean = target_t,
+                min_t = critical_ts$upper),
+    geom = "area",
+    fill = blues[2]
+  ) +
+  stat_function(
+    fun = tDistShading,
+    args = list(df = df,
+                min_t = critical_ts$upper),
+    geom = "area",
+    fill = "white"
+  ) +
+  
+  # critical t value
+  geom_segment(
+    aes(
+      x = critical_ts$upper,
+      xend = critical_ts$upper,
+      y = 0,
+      yend = dt(critical_ts$upper - target_t, df = df)
+    ),
+    linetype = 2,
+    color = "grey"
+  ) +
+  geom_segment(aes(
+    x = critical_ts$upper,
+    xend = critical_ts$upper,
+    y = 0,
+    yend = dt(critical_ts$upper, df = df)
+  )) +
+  
+  # t distributions
+  stat_function(
+    fun = shifted_dt,
+    args = list(df = df,
+                shift_mean = target_t),
+    size = 2,
+    color = blues[4]
+  ) +
+  stat_function(
+    fun = dt,
+    args = list(df = df),
+    size = 2,
+    color = "grey"
+  ) +
+  # Annotations
+  geom_mark_circle(
+    aes(x = -1,
+        y = dt(-1, df)),
+    description = "t distribution of the null hypothesis",
+    con.cap = 0,
+    con.colour = "grey",
+    expand = 0
+  ) +
+  geom_mark_circle(
+    aes(
+      x = target_t + .8,
+      y = shifted_dt(target_t + .8, df, shift_mean = target_t)
+    ),
+    description = "t distribution of the population mean",
+    con.cap = 0,
+    expand = 0,
+    color = blues[4],
+    con.colour = blues[4],
+    label.colour = blues[4]
+  ) +
+  geom_mark_circle(
+    aes(
+      x = target_t,
+      y = shifted_dt(target_t, df, shift_mean = target_t) / 2
+    ),
+    description = glue("Power of {scales::percent(target_power)}"),
+    con.cap = 0,
+    expand = 0,
+    con.colour = blues[2]
+  ) +
+  # Axes
+  scale_y_continuous(expand = c(0.01, 0)) +
+  scale_x_continuous(
+    breaks = c(0, critical_ts$upper, target_t),
+    labels = c("0", glue("{round(critical_ts$upper, 2)}\ncritical t"),
+               glue("{round(target_t, 2)}\nt at\npopulation\nmean"))
+  )
+```
+
+# It also means working back from p twice
+
+## Calculating effect size
+
+```{r}
+# Repeating for convenience
+critical_ts <- tibble(
+  lower = qt(0.025, df),
+  upper = qt(0.025, df, lower.tail = FALSE)
+)
+
+critical_mean <- critical_ts$upper * (sd(x) / sqrt(n))
+critical_mean
+```
+
+```{r}
+beta    <- .8
+power_t_around_zero <- qt(1 - beta, df) # "1-" for a positive value (so tells us where 20% prob is)
+power_t_around_zero * (sd(x) / sqrt(n))
+```
+```{r}
+(critical_ts$upper * (sd(x) / sqrt(n))) - (power_t_around_zero * (sd(x) / sqrt(n)))
+```
+```{r}
+observed_t <- critical_ts$upper - power_t_around_zero
+observed_t
+```
+
+
+
+```{r mean_with_80_power}
+# Determine the power of a result
+ggplot(tibble(x = seq(-8, 8, by = .1)), aes(x = x)) +
+  # Prob area
+  stat_function(
+    fun = shifted_tDistShading,
+    args = list(df = df,
+                shift_mean = observed_t,
+                min_t = critical_ts$upper),
+    geom = "area",
+    fill = blues[2]
+  ) +
+  stat_function(
+    fun = tDistShading,
+    args = list(df = df,
+                min_t = critical_ts$upper),
+    geom = "area",
+    fill = "white"
+  ) +
+  
+  # critical t value
+  geom_segment(
+    aes(
+      x = critical_ts$upper,
+      xend = critical_ts$upper,
+      y = 0,
+      yend = dt(critical_ts$upper - observed_t, df = df)
+    ),
+    linetype = 2,
+    color = "grey"
+  ) +
+  geom_segment(aes(
+    x = critical_ts$upper,
+    xend = critical_ts$upper,
+    y = 0,
+    yend = dt(critical_ts$upper, df = df)
+  )) +
+  
+  # t distributions
+  stat_function(
+    fun = shifted_dt,
+    args = list(df = df,
+                shift_mean = observed_t),
+    size = 2,
+    color = blues[4]
+  ) +
+  stat_function(
+    fun = dt,
+    args = list(df = df),
+    size = 2,
+    color = "grey"
+  ) +
+  # Annotations
+  geom_mark_circle(
+    aes(x = -1,
+        y = dt(-1, df)),
+    description = "t distribution of the null hypothesis",
+    con.cap = 0,
+    con.colour = "grey",
+    expand = 0
+  ) +
+  geom_mark_circle(
+    aes(
+      x = target_t + .8,
+      y = shifted_dt(observed_t + .8, df, shift_mean = observed_t)
+    ),
+    description = "t distribution of the population mean",
+    con.cap = 0,
+    expand = 0,
+    color = blues[4],
+    con.colour = blues[4],
+    label.colour = blues[4]
+  ) +
+  geom_mark_circle(
+    aes(
+      x = observed_t,
+      y = shifted_dt(observed_t, df, shift_mean = observed_t) / 2
+    ),
+    description = glue("Power of {scales::percent(beta)}"),
+    con.cap = 0,
+    expand = 0,
+    con.colour = blues[2]
+  ) +
+  # Axes
+  scale_y_continuous(expand = c(0.01, 0)) +
+  scale_x_continuous(
+    breaks = c(0, critical_ts$upper-.2, observed_t+.2),
+    labels = c("0", glue("{round(critical_ts$upper, 2)}\ncritical\nt"),
+               glue("{round(observed_t, 2)}\nt at\npopulation\nmean"))
+  )
+```
+
+## Calculating sample size
+
+```{r}
+# What about solving for n?
+population_mean <- 1.17
+alpha <- 0.05
+beta <- 0.80
+
+# n will be given where these two statements are equal
+#qt(1 - alpha/2, df) # the critical t
+#qt(1 - beta, df) + observed_t # The power t
+
+# So we can plug these into `uniroot` to scan for where their difference is 0
+# uses sample size range from 2 to 1Kbillion (should be enough ;) )
+required_n <- uniroot(function(n) {
+  df <- n - 1
+  critical_t   <- qt(1 - alpha/2, df)
+  population_t <- (population_mean - mu) / (sd(x) / sqrt(n))
+  power_t      <- qt(1 - beta, df) + population_t
+  return (critical_t - power_t)
+}, c(2, 1e12))$root
+
+ceiling(required_n)
+```
+
+```{r}
+# What about solving for n?
+population_mean <- 0.02
+
+# n will be given where these two statements are equal
+#qt(1 - alpha/2, df) # the critical t
+#qt(1 - beta, df) + observed_t # The power t
+
+# So we can plug these into `uniroot` to scan for where their difference is 0
+# uses sample size range from 2 to 1Kbillion (should be enough ;) )
+required_n <- uniroot(function(n) {
+  df <- n - 1
+  critical_t   <- qt(1 - alpha/2, df)
+  population_t <- (population_mean - mu) / (sd(x) / sqrt(n))
+  power_t      <- qt(1 - beta, df) + population_t
+  return (critical_t - power_t)
+}, c(2, 1e12))$root
+
+ceiling(required_n)
+```
+```
+
