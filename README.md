@@ -1,6 +1,6 @@
-# Template R Project
+# A quick refresher of statistical power
 
-A template R project I like to use when starting new work.
+Code for a Medium blog post
 
 ## Repo notes
 
